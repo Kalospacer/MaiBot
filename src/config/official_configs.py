@@ -400,66 +400,73 @@ class ModelConfig(ConfigBase):
 
     model_max_output_length: int = 800  # 最大回复长度
 
-    # 将 Dict[str, Any] 改为 dict[str, Any]
-    utils: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    utils: dict[str, Any] = field(default_factory=dict)
     """组件模型配置"""
 
-    utils_small: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    utils_small: dict[str, Any] = field(default_factory=dict)
     """组件小模型配置"""
 
-    summary_model: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    summary_model: dict[str, Any] = field(default_factory=dict)
     """为 ChattingInfoProcessor 的总结功能提供的模型配置"""
 
-    normal_chat_1: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    # <<< 关键新增：添加 memory_summary_fallback 字段 >>>
+    memory_summary_fallback: dict[str, Any] = field(default_factory=dict)
+    """记忆概括模型的备用引擎配置"""
+
+    normal_chat_1: dict[str, Any] = field(default_factory=lambda: {})
     """normal_chat首要回复模型模型配置"""
 
-    normal_chat_2: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    normal_chat_2: dict[str, Any] = field(default_factory=lambda: {})
     """normal_chat次要回复模型配置"""
 
-    memory_summary: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    memory_summary: dict[str, Any] = field(default_factory=lambda: {})
     """记忆的概括模型配置"""
 
-    vlm: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    vlm: dict[str, Any] = field(default_factory=lambda: {})
     """视觉语言模型配置"""
+    
+    # <<< 关键新增：添加 vlm_fallback 字段 >>>
+    vlm_fallback: dict[str, Any] = field(default_factory=dict)
+    """视觉语言模型的备用引擎配置"""
 
-    focus_working_memory: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    focus_working_memory: dict[str, Any] = field(default_factory=lambda: {})
     """专注工作记忆模型配置"""
 
-    focus_chat_mind: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    focus_chat_mind: dict[str, Any] = field(default_factory=lambda: {})
     """专注聊天规划模型配置"""
 
-    chat_mind_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
-    """缺失的备用模型配置字段"""
+    chat_mind_fallback: dict[str, Any] = field(default_factory=dict)
+    """聊天规划模型的备用引擎配置"""
 
-    focus_self_recognize: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    focus_self_recognize: dict[str, Any] = field(default_factory=lambda: {})
     """专注自我识别模型配置"""
 
-    self_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
-    """缺失的备用模型配置字段"""
+    self_fallback: dict[str, Any] = field(default_factory=dict)
+    """自我识别模型的备用引擎配置"""
 
-    focus_tool_use: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    focus_tool_use: dict[str, Any] = field(default_factory=lambda: {})
     """专注工具使用模型配置"""
 
-    focus_planner: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    focus_planner: dict[str, Any] = field(default_factory=lambda: {})
     """专注规划模型配置"""
 
-    planner_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
-    """缺失的备用模型配置字段"""
+    planner_fallback: dict[str, Any] = field(default_factory=dict)
+    """规划模型的备用引擎配置"""
 
-    focus_expressor: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    focus_expressor: dict[str, Any] = field(default_factory=lambda: {})
     """专注表达器模型配置"""
 
-    expressor_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
-    """缺失的备用模型配置字段"""
+    expressor_fallback: dict[str, Any] = field(default_factory=dict)
+    """表达器模型的备用引擎配置"""
 
-    embedding: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    embedding: dict[str, Any] = field(default_factory=lambda: {})
     """嵌入模型配置"""
 
-    pfc_action_planner: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    pfc_action_planner: dict[str, Any] = field(default_factory=lambda: {})
     """PFC动作规划模型配置"""
 
-    pfc_chat: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    pfc_chat: dict[str, Any] = field(default_factory=lambda: {})
     """PFC聊天模型配置"""
 
-    pfc_reply_checker: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
+    pfc_reply_checker: dict[str, Any] = field(default_factory=lambda: {})
     """PFC回复检查模型配置"""

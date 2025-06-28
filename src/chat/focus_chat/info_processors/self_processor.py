@@ -187,21 +187,21 @@ class SelfProcessor(BaseProcessor):
         # print(prompt)
 
         content = ""
+        llm_model_name_output = "未知模型" # 默认值
         try:
-            content, _ = await self.llm_model.generate_response_async(prompt=prompt)
+            # <<< 关键修正：捕获模型名称 >>>
+            content, (reasoning_content, llm_model_name_output) = await self.llm_model.generate_response_async(prompt=prompt)
             if not content:
                 logger.warning(f"{self.log_prefix} LLM返回空结果，自我识别失败。")
         except Exception as e:
-            # 处理总体异常
             logger.error(f"{self.log_prefix} 执行LLM请求或处理响应时出错: {e}")
             logger.error(traceback.format_exc())
             content = "自我识别过程中出现错误"
 
         if content == "None":
             content = ""
-        # 记录初步思考结果
-        # logger.debug(f"{self.log_prefix} 自我识别prompt: \n{prompt}\n")
-        logger.info(f"{self.log_prefix} 自我认知: {content}")
+        # <<< 关键修正：在日志中包含模型名称 >>>
+        logger.info(f"{self.log_prefix} 自我认知 ({llm_model_name_output} 输出): {content}")
 
         return content
 

@@ -181,22 +181,14 @@ class ActionPlanner:
                 prompt = f"{prompt}"
                 print(len(prompt))
                 
-                # generate_response_async 返回的是 (content, (reasoning_content, model_name))
-                # 其中 content 可能是 str 或 Dict
-                response_content, (reasoning_content, _) = await self.planner_llm.generate_response_async(prompt=prompt)
-                
-                # <<< 关键修正：直接使用 response_content，因为它可能是字典或字符串 >>>
-                # 不再需要 repair_json，因为 LLMRequest 已经处理了 JSON 解析。
-                # 如果 response_content 是字典，就直接用它作为 parsed_json
-                # 如果是字符串，则尝试解析它（尽管 LLMRequest 应该返回字典，这里做个安全检查）
+                # <<< 关键修正：捕获模型名称 >>>
+                response_content, (reasoning_content, llm_model_name_output) = await self.planner_llm.generate_response_async(prompt=prompt)
                 
                 parsed_json = {}
                 if isinstance(response_content, dict):
                     parsed_json = response_content
                 elif isinstance(response_content, str):
                     try:
-                        # 再次尝试修复并解析，以防万一LLMRequest内部的修复未生效或返回格式不标准
-                        # 但理论上，LLMRequest._default_response_handler 已经处理过 JSON 解析了
                         fixed_json_string = repair_json(response_content)
                         parsed_json = json.loads(fixed_json_string) if isinstance(fixed_json_string, str) else fixed_json_string
                     except Exception as e:
@@ -206,15 +198,13 @@ class ActionPlanner:
                     logger.warning(f"ActionPlanner: LLM响应内容类型非预期: {type(response_content)}")
                     parsed_json = {}
 
-                logger.debug(f"{self.log_prefix}[Planner] LLM 原始 JSON 响应 (预期): {response_content}")
-                logger.debug(f"{self.log_prefix}[Planner] LLM 原始理由 响应 (预期): {reasoning_content}")
+                logger.debug(f"{self.log_prefix}[Planner] LLM 原始 JSON 响应 (预期) ({llm_model_name_output} 输出): {response_content}") # <<< 添加模型名称 >>>
+                logger.debug(f"{self.log_prefix}[Planner] LLM 原始理由 响应 (预期) ({llm_model_name_output} 输出): {reasoning_content}") # <<< 添加模型名称 >>>
 
 
-                # 提取决策，提供默认值
                 extracted_action = parsed_json.get("action", "no_reply")
                 extracted_reasoning = parsed_json.get("reasoning", "LLM未提供理由")
 
-                # 将所有其他属性添加到action_data
                 action_data = {}
                 for key, value in parsed_json.items():
                     if key not in ["action", "reasoning"]:
@@ -244,16 +234,15 @@ class ActionPlanner:
             reasoning = f"Planner 内部处理错误: {outer_e}"
 
         logger.debug(
-            f"{self.log_prefix}规划器Prompt:\n{prompt}\n\n决策动作:{action},\n动作信息: '{action_data}'\n理由: {reasoning}"
+            f"{self.log_prefix}规划器Prompt:\n{prompt}\n\n决策动作:{action},\n动作信息: '{action_data}'\n理由: {reasoning} (模型: {llm_model_name_output})" # <<< 添加模型名称 >>>
         )
 
-        # 恢复到默认动作集
         self.action_manager.restore_actions()
         logger.debug(
             f"{self.log_prefix}规划后恢复到默认动作集, 当前可用: {list(self.action_manager.get_using_actions().keys())}"
         )
 
-        action_result = {"action_type": action, "action_data": action_data, "reasoning": reasoning}
+        action_result = {"action_type": action, "action_data": action_data, "reasoning": reasoning, "model_name": llm_model_name_output} # <<< 添加模型名称到action_result >>>
 
         plan_result = {
             "action_result": action_result,

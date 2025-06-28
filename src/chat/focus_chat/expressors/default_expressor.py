@@ -248,15 +248,13 @@ class DefaultExpressor:
                 return None
 
             try:
-                with Timer("LLM生成", {}):  # 内部计时器，可选保留
-                    # TODO: API-Adapter修改标记
-                    # logger.info(f"{self.log_prefix}[Replier-{thinking_id}]\nPrompt:\n{prompt}\n")
-                    content, (reasoning_content, model_name) = await self.express_model.generate_response_async(prompt)
-
-                    # logger.info(f"{self.log_prefix}\nPrompt:\n{prompt}\n---------------------------\n")
+                with Timer("LLM生成", {}):
+                    # <<< 关键修正：捕获模型名称 >>>
+                    content, (reasoning_content, llm_model_name_output) = await self.express_model.generate_response_async(prompt)
 
                     logger.info(f"想要表达：{in_mind_reply}||理由：{reason}")
-                    logger.info(f"最终回复: {content}\n")
+                    # <<< 关键修正：在日志中包含模型名称 >>>
+                    logger.info(f"最终回复 ({llm_model_name_output} 输出): {content}\n")
 
                 info_catcher.catch_after_llm_generated(
                     prompt=prompt, response=content, reasoning_content=reasoning_content, model_name=model_name
