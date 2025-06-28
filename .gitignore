@@ -74,6 +74,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# 忽略 NapCat 框架文件夹
+napcatframework/
+
+# 忽略 SQLiteStudio 文件夹
+SQLiteStudio/
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -307,3 +313,6 @@ src/chat/focus_chat/working_memory/test/test4.txt
 run_maiserver.bat
 src/plugins/test_plugin_pic/actions/pic_action_config.toml
 run_pet.bat
+python-3.12.8-amd64.exe
+MaiBot.7z
+onepackdata/vc_redist.x64.exe
