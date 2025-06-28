@@ -1,4 +1,6 @@
-import json  # <--- 确保导入 json
+# 文件: src/chat/focus_chat/planners/planner.py
+
+import json
 import traceback
 from typing import List, Dict, Any, Optional
 from rich.traceback import install
@@ -21,7 +23,7 @@ logger = get_logger("planner")
 
 install(extra_lines=3)
 
-
+# init_prompt 保持不变
 def init_prompt():
     Prompt(
         """
@@ -77,11 +79,12 @@ class ActionPlanner:
     def __init__(self, log_prefix: str, action_manager: ActionManager):
         self.log_prefix = log_prefix
         # LLM规划器配置
-        self.planner_llm = LLMRequest(
-            model=global_config.model.focus_planner,
-            max_tokens=1000,
-            request_type="focus.planner",  # 用于动作规划
-        )
+        # 获取 focus_planner 的基础配置
+        planner_model_config = global_config.model.focus_planner.copy()
+        if 'max_tokens' not in planner_model_config:
+            planner_model_config['max_tokens'] = 1000
+        planner_model_config['request_type'] = "focus.planner"
+        self.planner_llm = LLMRequest(model_config=planner_model_config)
 
         self.action_manager = action_manager
 
@@ -135,7 +138,6 @@ class ActionPlanner:
                     self_info = info.get_processed_info()
                 elif isinstance(info, StructuredInfo):
                     structured_info = info.get_processed_info()
-                    # print(f"structured_info: {structured_info}")
                 # elif not isinstance(info, ActionInfo):  # 跳过已处理的ActionInfo
                 # extra_info.append(info.get_processed_info())
 
@@ -162,13 +164,13 @@ class ActionPlanner:
             # --- 构建提示词 (调用修改后的 PromptBuilder 方法) ---
             prompt = await self.build_planner_prompt(
                 self_info_block=self_info,
-                is_group_chat=is_group_chat,  # <-- Pass HFC state
+                is_group_chat=is_group_chat,
                 chat_target_info=None,
-                observed_messages_str=observed_messages_str,  # <-- Pass local variable
-                current_mind=current_mind,  # <-- Pass argument
-                structured_info=structured_info,  # <-- Pass SubMind info
-                current_available_actions=current_available_actions,  # <-- Pass determined actions
-                cycle_info=cycle_info,  # <-- Pass cycle info
+                observed_messages_str=observed_messages_str,
+                current_mind=current_mind,
+                structured_info=structured_info,
+                current_available_actions=current_available_actions,
+                cycle_info=cycle_info,
                 extra_info=extra_info,
                 running_memorys=running_memorys,
             )
@@ -178,56 +180,62 @@ class ActionPlanner:
             try:
                 prompt = f"{prompt}"
                 print(len(prompt))
-                llm_content, (reasoning_content, _) = await self.planner_llm.generate_response_async(prompt=prompt)
-                logger.debug(f"{self.log_prefix}[Planner] LLM 原始 JSON 响应 (预期): {llm_content}")
+                
+                # generate_response_async 返回的是 (content, (reasoning_content, model_name))
+                # 其中 content 可能是 str 或 Dict
+                response_content, (reasoning_content, _) = await self.planner_llm.generate_response_async(prompt=prompt)
+                
+                # <<< 关键修正：直接使用 response_content，因为它可能是字典或字符串 >>>
+                # 不再需要 repair_json，因为 LLMRequest 已经处理了 JSON 解析。
+                # 如果 response_content 是字典，就直接用它作为 parsed_json
+                # 如果是字符串，则尝试解析它（尽管 LLMRequest 应该返回字典，这里做个安全检查）
+                
+                parsed_json = {}
+                if isinstance(response_content, dict):
+                    parsed_json = response_content
+                elif isinstance(response_content, str):
+                    try:
+                        # 再次尝试修复并解析，以防万一LLMRequest内部的修复未生效或返回格式不标准
+                        # 但理论上，LLMRequest._default_response_handler 已经处理过 JSON 解析了
+                        fixed_json_string = repair_json(response_content)
+                        parsed_json = json.loads(fixed_json_string) if isinstance(fixed_json_string, str) else fixed_json_string
+                    except Exception as e:
+                        logger.error(f"ActionPlanner: 尝试从LLM响应字符串中解析JSON失败: {e}. 原始内容: {response_content[:200]}")
+                        parsed_json = {}
+                else:
+                    logger.warning(f"ActionPlanner: LLM响应内容类型非预期: {type(response_content)}")
+                    parsed_json = {}
+
+                logger.debug(f"{self.log_prefix}[Planner] LLM 原始 JSON 响应 (预期): {response_content}")
                 logger.debug(f"{self.log_prefix}[Planner] LLM 原始理由 响应 (预期): {reasoning_content}")
-            except Exception as req_e:
-                logger.error(f"{self.log_prefix}[Planner] LLM 请求执行失败: {req_e}")
-                reasoning = f"LLM 请求失败，你的模型出现问题: {req_e}"
-                action = "no_reply"
 
-            if llm_content:
-                try:
-                    fixed_json_string = repair_json(llm_content)
-                    if isinstance(fixed_json_string, str):
-                        try:
-                            parsed_json = json.loads(fixed_json_string)
-                        except json.JSONDecodeError as decode_error:
-                            logger.error(f"JSON解析错误: {str(decode_error)}")
-                            parsed_json = {}
-                    else:
-                        # 如果repair_json直接返回了字典对象，直接使用
-                        parsed_json = fixed_json_string
 
-                    # 提取决策，提供默认值
-                    extracted_action = parsed_json.get("action", "no_reply")
-                    extracted_reasoning = parsed_json.get("reasoning", "LLM未提供理由")
+                # 提取决策，提供默认值
+                extracted_action = parsed_json.get("action", "no_reply")
+                extracted_reasoning = parsed_json.get("reasoning", "LLM未提供理由")
 
-                    # 将所有其他属性添加到action_data
-                    action_data = {}
-                    for key, value in parsed_json.items():
-                        if key not in ["action", "reasoning"]:
-                            action_data[key] = value
+                # 将所有其他属性添加到action_data
+                action_data = {}
+                for key, value in parsed_json.items():
+                    if key not in ["action", "reasoning"]:
+                        action_data[key] = value
 
-                    # 对于reply动作不需要额外处理，因为相关字段已经在上面的循环中添加到action_data
-
-                    if extracted_action not in current_available_actions:
-                        logger.warning(
-                            f"{self.log_prefix}LLM 返回了当前不可用或无效的动作: '{extracted_action}' (可用: {list(current_available_actions.keys())})，将强制使用 'no_reply'"
-                        )
-                        action = "no_reply"
-                        reasoning = f"LLM 返回了当前不可用的动作 '{extracted_action}' (可用: {list(current_available_actions.keys())})。原始理由: {extracted_reasoning}"
-                    else:
-                        # 动作有效且可用
-                        action = extracted_action
-                        reasoning = extracted_reasoning
-
-                except Exception as json_e:
+                if extracted_action not in current_available_actions:
                     logger.warning(
-                        f"{self.log_prefix}解析LLM响应JSON失败，模型返回不标准: {json_e}. LLM原始输出: '{llm_content}'"
+                        f"{self.log_prefix}LLM 返回了当前不可用或无效的动作: '{extracted_action}' (可用: {list(current_available_actions.keys())})，将强制使用 'no_reply'"
                     )
-                    reasoning = f"解析LLM响应JSON失败: {json_e}. 将使用默认动作 'no_reply'."
                     action = "no_reply"
+                    reasoning = f"LLM 返回了当前不可用的动作 '{extracted_action}' (可用: {list(current_available_actions.keys())})。原始理由: {extracted_reasoning}"
+                else:
+                    action = extracted_action
+                    reasoning = extracted_reasoning
+
+            except Exception as json_e:
+                logger.warning(
+                    f"{self.log_prefix}解析LLM响应JSON失败，模型返回不标准: {json_e}. LLM原始输出: '{response_content}'"
+                )
+                reasoning = f"解析LLM响应JSON失败: {json_e}. 将使用默认动作 'no_reply'."
+                action = "no_reply"
 
         except Exception as outer_e:
             logger.error(f"{self.log_prefix}Planner 处理过程中发生意外错误，规划失败，将执行 no_reply: {outer_e}")
@@ -256,11 +264,12 @@ class ActionPlanner:
 
         return plan_result
 
+    # build_planner_prompt 方法保持不变
     async def build_planner_prompt(
         self,
         self_info_block: str,
-        is_group_chat: bool,  # Now passed as argument
-        chat_target_info: Optional[dict],  # Now passed as argument
+        is_group_chat: bool,
+        chat_target_info: Optional[dict],
         observed_messages_str: str,
         current_mind: Optional[str],
         structured_info: Optional[str],
@@ -269,7 +278,6 @@ class ActionPlanner:
         extra_info: list[str],
         running_memorys: List[Dict[str, Any]],
     ) -> str:
-        """构建 Planner LLM 的提示词 (获取模板并填充数据)"""
         try:
             memory_str = ""
             if global_config.focus_chat.parallel_processing:
@@ -280,7 +288,7 @@ class ActionPlanner:
                         memory_str += f"{running_memory['topic']}: {running_memory['content']}\n"
 
             chat_context_description = "你现在正在一个群聊中"
-            chat_target_name = None  # Only relevant for private
+            chat_target_name = None
             if not is_group_chat and chat_target_info:
                 chat_target_name = (
                     chat_target_info.get("person_name") or chat_target_info.get("user_nickname") or "对方"
@@ -303,12 +311,6 @@ class ActionPlanner:
 
             action_options_block = ""
             for using_actions_name, using_actions_info in current_available_actions.items():
-                # print(using_actions_name)
-                # print(using_actions_info)
-                # print(using_actions_info["parameters"])
-                # print(using_actions_info["require"])
-                # print(using_actions_info["description"])
-
                 using_action_prompt = await global_prompt_manager.get_prompt_async("action_prompt")
 
                 param_text = ""
@@ -341,14 +343,12 @@ class ActionPlanner:
             prompt = planner_prompt_template.format(
                 self_info_block=self_info_block,
                 memory_str=memory_str,
-                # bot_name=global_config.bot.nickname,
                 prompt_personality=personality_block,
                 chat_context_description=chat_context_description,
                 chat_content_block=chat_content_block,
                 mind_info_block=mind_info_block,
                 cycle_info_block=cycle_info,
                 action_options_text=action_options_block,
-                # action_available_block=action_available_block,
                 extra_info_block=extra_info_block,
                 moderation_prompt=moderation_prompt_block,
             )

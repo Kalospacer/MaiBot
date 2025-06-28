@@ -24,16 +24,30 @@ class ChattingInfoProcessor(BaseProcessor):
 
     log_prefix = "聊天信息处理"
 
-    def __init__(self):
+    def __init__(self): # <--- 保持 __init__ 方法不接收 model_config 参数
         """初始化观察处理器"""
         super().__init__()
         # TODO: API-Adapter修改标记
-        self.model_summary = LLMRequest(
-            model=global_config.model.utils_small,
-            temperature=0.7,
-            max_tokens=300,
-            request_type="focus.observation.chat",
-        )
+        
+        # <<< 关键修正：动态构建 model_config 字典 >>>
+        # 获取 utils_small 的基础配置，它本身就是个字典
+        base_model_config = global_config.model.utils_small.copy() # 使用 .copy() 防止修改全局配置
+        
+        # 覆盖或添加 ChattingInfoProcessor 特定的参数
+        base_model_config['temperature'] = 0.7
+        # max_tokens 是 LLMRequest 在 _build_payload 时会检查的参数
+        # 确保它在 model_config 中
+        base_model_config['max_tokens'] = 300
+        # request_type 是 LLMRequest 在 __init__ 时会从 kwargs.pop("request_type") 获取的
+        # 把它放在 model_config 中，然后在 LLMRequest.__init__ 中，
+        # 我们可以确保它被正确地从 model_config 中提取，而不是从 kwargs 中。
+        # 鉴于 LLMRequest.__init__ 现在的设计，
+        # 最简单是将其作为 model_config 的一部分，或者作为 kwargs 传递 (但这样就回到了老问题)。
+        # 最佳实践是让 model_config 包含所有参数。
+        base_model_config['request_type'] = "focus.observation.chat"
+
+        # 现在将这个构建好的字典传递给 LLMRequest 的 model_config 参数
+        self.model_summary = LLMRequest(model_config=base_model_config)
 
     async def process_info(
         self,

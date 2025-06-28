@@ -69,12 +69,30 @@ class MindProcessor(BaseProcessor):
 
         self.subheartflow_id = subheartflow_id
 
-        self.llm_model = LLMRequest(
-            model=global_config.model.focus_chat_mind,
-            # temperature=global_config.model.focus_chat_mind["temp"],
-            max_tokens=800,
-            request_type="focus.processor.chat_mind",
-        )
+        # <<< 关键修正：动态构建 model_config 字典 >>>
+        # global_config.model.focus_chat_mind 应该已经是 dict[str, Any] 类型了
+        # 因为在 official_configs.py 中 ModelConfig 的字段定义为 dict[str, Any]
+        # 复制一份，防止修改原始配置
+        mind_model_config = global_config.model.focus_chat_mind.copy()
+        
+        # 覆盖或添加 MindProcessor 特定的硬编码参数
+        # 检查并添加 'max_tokens' 如果它不在原始配置中，或者覆盖它
+        # 确保 'max_tokens' 最终存在于 mind_model_config 中
+        if 'max_tokens' not in mind_model_config:
+            mind_model_config['max_tokens'] = 800
+        else:
+            # 如果配置中有，但您想强制使用 800，则取消注释下面一行
+            # mind_model_config['max_tokens'] = 800
+            pass # 保持现有配置中的 max_tokens
+
+        # 确保 'request_type' 存在
+        mind_model_config['request_type'] = "focus.processor.chat_mind"
+        
+        # temperature 参数根据注释，您似乎希望使用配置文件中的值，而不是硬编码 0.7
+        # 因此这里不需要额外设置 temperature。
+        # 如果 global_config.model.focus_chat_mind 中没有 "temp" 键，LLMRequest 内部会有默认值。
+        
+        self.llm_model = LLMRequest(model_config=mind_model_config)
 
         self.current_mind = ""
         self.past_mind = []

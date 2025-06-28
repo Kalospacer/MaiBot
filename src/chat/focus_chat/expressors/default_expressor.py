@@ -75,12 +75,32 @@ class DefaultExpressor:
     def __init__(self, chat_id: str):
         self.log_prefix = "expressor"
         # TODO: API-Adapter修改标记
-        self.express_model = LLMRequest(
-            model=global_config.model.focus_expressor,
-            # temperature=global_config.model.focus_expressor["temp"],
-            max_tokens=256,
-            request_type="focus.expressor",
-        )
+        
+        # <<< 关键修正：动态构建 model_config 字典 >>>
+        # 获取 focus_expressor 的基础配置
+        expressor_model_config = global_config.model.focus_expressor.copy() # 使用 .copy() 防止修改全局配置
+
+        # 覆盖或添加 DefaultExpressor 特定的硬编码参数
+        # 确保 temperature 参数能够正确设置。如果配置文件中有 "temp" 键，它会被复制过来。
+        # 您bot_config.toml中 focus_expressor 的 temp 值是 0.7
+        # 如果您希望强制使用 0.7（如果配置文件中没有），可以这样做：
+        # if 'temperature' not in expressor_model_config:
+        #     expressor_model_config['temperature'] = 0.7
+        
+        # 检查并添加 'max_tokens'
+        if 'max_tokens' not in expressor_model_config:
+            expressor_model_config['max_tokens'] = 256
+        else:
+            # 如果配置中有，但您想强制使用 256，则取消注释下面一行
+            # expressor_model_config['max_tokens'] = 256
+            pass # 保持现有配置中的 max_tokens
+
+        # 确保 'request_type' 存在
+        expressor_model_config['request_type'] = "focus.expressor"
+        
+        # 现在将这个构建好的字典传递给 LLMRequest 的 model_config 参数
+        self.express_model = LLMRequest(model_config=expressor_model_config)
+
         self.heart_fc_sender = HeartFCSender()
 
         self.chat_id = chat_id

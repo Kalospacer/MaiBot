@@ -1,3 +1,5 @@
+# 文件: src/llm_models/utils_model.py
+
 import asyncio
 import json
 import re
@@ -69,9 +71,12 @@ class LLMRequest:
     # --- _init_database, _record_usage, _calculate_cost are unchanged ---
     @staticmethod
     def _init_database(): db.create_tables([LLMUsage], safe=True)
-    def _record_usage(self, p_tokens, c_tokens, t_tokens, user_id="system", req_type=None, endpoint="/chat/completions"):
-        if req_type is None: req_type = self.request_type
-        LLMUsage.create(model_name=self.model_name, user_id=user_id, request_type=req_type, endpoint=endpoint, prompt_tokens=p_tokens, completion_tokens=c_tokens, total_tokens=t_tokens, cost=self._calculate_cost(p_tokens, c_tokens), status="success", timestamp=datetime.now())
+    
+    # <<< 确保这里是 request_type 而不是 req_type >>>
+    def _record_usage(self, p_tokens, c_tokens, t_tokens, user_id="system", request_type=None, endpoint="/chat/completions"):
+        if request_type is None: request_type = self.request_type
+        LLMUsage.create(model_name=self.model_name, user_id=user_id, request_type=request_type, endpoint=endpoint, prompt_tokens=p_tokens, completion_tokens=c_tokens, total_tokens=t_tokens, cost=self._calculate_cost(p_tokens, c_tokens), status="success", timestamp=datetime.now())
+    
     def _calculate_cost(self, p_tokens, c_tokens): return round(((p_tokens / 1e6) * self.pri_in) + ((c_tokens / 1e6) * self.pri_out), 6)
 
     async def _prepare_request(self, requester: 'LLMRequest', endpoint: str, **kwargs) -> Dict[str, Any]:
@@ -108,24 +113,51 @@ class LLMRequest:
                 await asyncio.sleep(wait_time)
         return None
 
+    # In utils_model.py, use this function to replace the old _execute_request function
     async def _execute_request(self, **kwargs) -> Optional[Dict]:
+        """
+        Executes the request with the primary model. If it fails and a fallback is configured,
+        it automatically retries the same request with the fallback model.
+        This is the final, architecturally correct version.
+        """
+        # Step 1: Try with the primary model (self)
         logger.debug(f"🚀 正在尝试主引擎: {self.model_name} (Provider: {self.provider})")
         primary_result = await self._execute_request_internal(self, **kwargs)
+    
+        # Step 2: If primary fails AND a fallback is configured...
         if primary_result is None and self.fallback_model_name:
             logger.warning(f"⚠️ 主引擎 {self.model_name} 调用失败，正在启动备用引擎: {self.fallback_model_name}...")
+            
             try:
-                all_model_configs = global_config.model.dict()
-                fallback_config_dict = all_model_configs.get(self.fallback_model_name)
+                # --- FINAL FIX: Intelligently get the fallback configuration ---
+                # Instead of assuming it's a direct attribute, we treat the model config
+                # as a dictionary-like object to find the fallback configuration block.
+                # Assuming global_config.model is a ModelConfig dataclass
+                # We need to get the config for fallback_model_name dynamically.
+                # Use getattr to safely retrieve the fallback model config from global_config.model
+                # which is a ModelConfig instance.
+                fallback_config_dict = getattr(global_config.model, self.fallback_model_name, None)
+                
                 if not fallback_config_dict:
                     logger.error(f"❌ 备用引擎配置 '{self.fallback_model_name}' 未在config/bot_config.toml中找到!")
                     return None
-                # Create a NEW requester with the correct fallback config
+                # --- FIX END ---
+                
+                # Create a NEW, temporary LLMRequest object with the fallback's configuration
                 fallback_requester = LLMRequest(model_config=fallback_config_dict, **self.params)
+                
                 logger.info(f"⚙️ 正在使用备用引擎 {fallback_requester.model_name} (Provider: {fallback_requester.provider}) 重新发送请求...")
+                
+                # Execute the same request using the new, correctly configured fallback requester
                 return await self._execute_request_internal(fallback_requester, **kwargs)
+    
             except Exception as e:
                 logger.error(f"❌ 备用引擎 {self.fallback_model_name} 调用也失败了: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return None
+    
+        # Step 3: If primary succeeds or no fallback exists, return the primary result
         return primary_result
 
     # --- FINAL FIX: Signature Correction ---
@@ -146,21 +178,36 @@ class LLMRequest:
             if json_result is None: logger.error(f"无法从响应中解析出JSON: {raw_text[:1000]}")
             return json_result
     
-    # --- FINAL FIX: Signature Correction ---
+    # --- FINAL FIX: Signature Correction & Direct JSON Handling ---
     def _default_response_handler(self, result: Optional[Dict], **handler_kwargs) -> Optional[Tuple]:
         if result is None: return None
+
+        # 优先处理标准聊天补全响应
         if "choices" in result and result["choices"]:
             message = result["choices"][0].get("message", {})
             content, tool_calls = message.get("content"), message.get("tool_calls")
             if tool_calls is None and (content is None or not str(content).strip()):
-                logger.warning(f"模型 {self.model_name} 返回空回复。")
+                logger.warning(f"模型 {self.model_name} 返回空回复（无内容或工具调用）。")
                 return None
             content = content if content is not None else ""
             content_str, reasoning = self._extract_reasoning(str(content))
             if usage := result.get("usage"):
                 self._record_usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), usage.get("total_tokens", 0), **handler_kwargs)
             return (content_str, reasoning, tool_calls) if tool_calls else (content_str, reasoning)
-        logger.warning(f"响应中无'choices'字段: {result}")
+        
+        # <<< 新增逻辑：处理不含'choices'字段的直接JSON响应 >>>
+        # 如果没有 'choices' 字段，但结果本身是一个非空的字典，
+        # 则将其视为模型直接返回的结构化数据（例如，来自嵌入或关键词提取模型）。
+        # 在这种情况下，将整个字典作为内容的第一个元素返回。
+        if isinstance(result, dict) and result:
+            logger.debug(f"模型 {self.model_name} 返回直接JSON响应 (无'choices'字段)。")
+            # 尝试记录使用量，如果result中包含usage信息
+            if usage := result.get("usage"):
+                self._record_usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), usage.get("total_tokens", 0), **handler_kwargs)
+            # 返回一个包含该字典的元组作为 content，reasoning 和 tool_calls 为 None
+            return (result, None, None) # (content, reasoning, tool_calls)
+        
+        logger.warning(f"响应中无'choices'字段且无法识别响应格式: {result}")
         return None
 
     # ... (Rest of the helper methods are unchanged) ...
@@ -203,7 +250,23 @@ class LLMRequest:
         if processed_response is None:
             logger.warning(f"模型 {self.model_name} 响应处理失败，提供默认安全回复。")
             return default_response
-        return (processed_response + (None, None))[:3]
+        
+        # processed_response 此时可能是 (str, str, Optional[list]) 或者 (dict, None, None)
+        # 我们需要确保它始终是 (content, reasoning, tool_calls)
+        # 如果 processed_response 是 (dict, None, None)，那么它的长度是3，可以直接解包。
+        # 如果是 (str, str)，它的长度是2，需要补齐 None。
+        
+        # Check if processed_response is a tuple and its length
+        if isinstance(processed_response, tuple):
+            if len(processed_response) == 3:
+                return processed_response
+            elif len(processed_response) == 2:
+                # Assuming it's (content_str, reasoning) without tool_calls
+                return (processed_response[0], processed_response[1], None)
+        
+        # Fallback for unexpected format (though _default_response_handler should prevent this now)
+        logger.warning(f"模型 {self.model_name} 响应处理器返回了意外格式: {processed_response}，提供默认安全回复。")
+        return default_response
         
     async def _call_and_process(self, default_response: Tuple, **kwargs) -> Tuple:
         raw_result = await self._execute_request(**kwargs)
@@ -248,8 +311,9 @@ class LLMRequest:
         if not text: return None
         def handler(result, **kwargs): # embedding handler doesn't need other args
             if result and "data" in result and result["data"]:
-                if usage := result.get("usage"): self._record_usage(usage.get("prompt_tokens", 0), 0, usage.get("total_tokens", 0), "system", "embedding", "/embeddings")
+                self._record_usage(result.get("usage", {}).get("prompt_tokens", 0), 0, result.get("usage", {}).get("total_tokens", 0), "system", "embedding", "/embeddings")
                 return result["data"][0].get("embedding")
+            return None # Explicitly return None if data or embedding is not found
         
         # Use _execute_request directly as embedding has a special handler
         raw_result = await self._execute_request(payload={"model": self.model_name, "input": text}, endpoint="/embeddings")

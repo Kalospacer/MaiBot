@@ -109,6 +109,24 @@ class PersonInfoManager:
             creation_data[field_name] = value
             await self.create_person_info(person_id, creation_data)
 
+    # --- THIS IS THE RESTORED METHOD ---
+    @staticmethod
+    async def has_one_field(person_id: str, field_name: str):
+        """判断是否存在某一个字段"""
+        if field_name not in PersonInfo._meta.fields:
+            logger.debug(f"检查字段'{field_name}'失败，未在 PersonInfo Peewee 模型中定义。")
+            return False
+        def _db_has_field_sync(p_id: str, f_name: str):
+            # A more direct check: see if the field is not None
+            record = PersonInfo.select(getattr(PersonInfo, f_name)).where(PersonInfo.person_id == p_id).get_or_none()
+            return record is not None and getattr(record, f_name) is not None
+        try:
+            return await asyncio.to_thread(_db_has_field_sync, person_id, field_name)
+        except Exception as e:
+            logger.error(f"检查字段 {field_name} for {person_id} 时出错: {e}")
+            return False
+    # --- RESTORATION END ---
+
     async def get_value(self, person_id: str, field_name: str):
         if not person_id: return person_info_default.get(field_name)
         if field_name not in PersonInfo._meta.fields: return person_info_default.get(field_name)

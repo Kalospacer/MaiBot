@@ -181,29 +181,27 @@ class HeartFChatting:
 
     def _register_default_processors(self):
         """根据 self.enabled_processor_names 注册信息处理器"""
-        self.processors = []  # 清空已有的
+        self.processors = []
 
-        for name in self.enabled_processor_names:  # 'name' is "ChattingInfoProcessor", etc.
-            processor_info = PROCESSOR_CLASSES.get(name)  # processor_info is (ProcessorClass, config_key)
+        for name in self.enabled_processor_names:
+            processor_info = PROCESSOR_CLASSES.get(name)
             if processor_info:
-                processor_actual_class = processor_info[0]  # 获取实际的类定义
-                # 根据处理器类名判断是否需要 subheartflow_id
+                processor_actual_class = processor_info[0]
                 if name in ["MindProcessor", "ToolProcessor", "WorkingMemoryProcessor", "SelfProcessor"]:
                     self.processors.append(processor_actual_class(subheartflow_id=self.stream_id))
                 elif name == "ChattingInfoProcessor":
-                    self.processors.append(processor_actual_class())
+                    # <<< 关键修正：还原为无参数实例化 >>>
+                    # ChattingInfoProcessor 现在在其 __init__ 内部自己构建 model_config
+                    self.processors.append(processor_actual_class()) # <--- 还原为无参数
                 else:
-                    # 对于PROCESSOR_CLASSES中定义但此处未明确处理构造的处理器
-                    # (例如, 新增了一个处理器到PROCESSOR_CLASSES, 它不需要id, 也不叫ChattingInfoProcessor)
                     try:
-                        self.processors.append(processor_actual_class())  # 尝试无参构造
+                        self.processors.append(processor_actual_class())
                         logger.debug(f"{self.log_prefix} 注册处理器 {name} (尝试无参构造).")
                     except TypeError:
                         logger.error(
                             f"{self.log_prefix} 处理器 {name} 构造失败。它可能需要参数（如 subheartflow_id）但未在注册逻辑中明确处理。"
                         )
             else:
-                # 这理论上不应该发生，因为 enabled_processor_names 是从 PROCESSOR_CLASSES 的键生成的
                 logger.warning(
                     f"{self.log_prefix} 在 PROCESSOR_CLASSES 中未找到名为 '{name}' 的处理器定义，将跳过注册。"
                 )

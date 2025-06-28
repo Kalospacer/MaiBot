@@ -394,57 +394,72 @@ class MaimMessageConfig(ConfigBase):
     auth_token: list[str] = field(default_factory=lambda: [])
     """认证令牌，用于API验证，为空则不启用验证"""
 
-
 @dataclass
 class ModelConfig(ConfigBase):
     """模型配置类"""
 
     model_max_output_length: int = 800  # 最大回复长度
 
-    utils: dict[str, Any] = field(default_factory=lambda: {})
+    # 将 Dict[str, Any] 改为 dict[str, Any]
+    utils: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
     """组件模型配置"""
 
-    utils_small: dict[str, Any] = field(default_factory=lambda: {})
+    utils_small: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
     """组件小模型配置"""
 
-    normal_chat_1: dict[str, Any] = field(default_factory=lambda: {})
+    summary_model: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    """为 ChattingInfoProcessor 的总结功能提供的模型配置"""
+
+    normal_chat_1: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """normal_chat首要回复模型模型配置"""
 
-    normal_chat_2: dict[str, Any] = field(default_factory=lambda: {})
+    normal_chat_2: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """normal_chat次要回复模型配置"""
 
-    memory_summary: dict[str, Any] = field(default_factory=lambda: {})
+    memory_summary: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """记忆的概括模型配置"""
 
-    vlm: dict[str, Any] = field(default_factory=lambda: {})
+    vlm: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """视觉语言模型配置"""
 
-    focus_working_memory: dict[str, Any] = field(default_factory=lambda: {})
+    focus_working_memory: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """专注工作记忆模型配置"""
 
-    focus_chat_mind: dict[str, Any] = field(default_factory=lambda: {})
+    focus_chat_mind: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """专注聊天规划模型配置"""
 
-    focus_self_recognize: dict[str, Any] = field(default_factory=lambda: {})
+    chat_mind_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    """缺失的备用模型配置字段"""
+
+    focus_self_recognize: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """专注自我识别模型配置"""
 
-    focus_tool_use: dict[str, Any] = field(default_factory=lambda: {})
+    self_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    """缺失的备用模型配置字段"""
+
+    focus_tool_use: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """专注工具使用模型配置"""
 
-    focus_planner: dict[str, Any] = field(default_factory=lambda: {})
+    focus_planner: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """专注规划模型配置"""
 
-    focus_expressor: dict[str, Any] = field(default_factory=lambda: {})
+    planner_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    """缺失的备用模型配置字段"""
+
+    focus_expressor: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """专注表达器模型配置"""
 
-    embedding: dict[str, Any] = field(default_factory=lambda: {})
+    expressor_fallback: dict[str, Any] = field(default_factory=dict) # <<< 修正这里 >>>
+    """缺失的备用模型配置字段"""
+
+    embedding: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """嵌入模型配置"""
 
-    pfc_action_planner: dict[str, Any] = field(default_factory=lambda: {})
+    pfc_action_planner: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """PFC动作规划模型配置"""
 
-    pfc_chat: dict[str, Any] = field(default_factory=lambda: {})
+    pfc_chat: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """PFC聊天模型配置"""
 
-    pfc_reply_checker: dict[str, Any] = field(default_factory=lambda: {})
+    pfc_reply_checker: dict[str, Any] = field(default_factory=lambda: {}) # <<< 修正这里 >>>
     """PFC回复检查模型配置"""

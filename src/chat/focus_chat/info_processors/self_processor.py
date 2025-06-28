@@ -48,16 +48,33 @@ class SelfProcessor(BaseProcessor):
     log_prefix = "自我认同"
 
     def __init__(self, subheartflow_id: str):
+        """初始化自我处理器"""
         super().__init__()
-
+        self.processor_id = "SelfProcessor"
         self.subheartflow_id = subheartflow_id
 
-        self.llm_model = LLMRequest(
-            model=global_config.model.focus_self_recognize,
-            temperature=global_config.model.focus_self_recognize["temp"],
-            max_tokens=800,
-            request_type="focus.processor.self_identify",
-        )
+        # <<< 关键修正：动态构建 model_config 字典 >>>
+        # 获取 focus_self_recognize 的基础配置
+        # global_config.model.focus_self_recognize 应该是一个字典，复制一份以防止修改原始配置
+        self_recognize_model_config = global_config.model.focus_self_recognize.copy()
+        
+        # 覆盖或添加 SelfProcessor 特定的硬编码参数
+        # 确保 temperature 参数能够正确设置。如果配置文件中有 "temp" 键，它会被复制过来。
+        # 如果您希望强制使用 0.5（如 bot_config.toml 中 focus_self_recognize 的 temp 值），可以这样做：
+        # self_recognize_model_config['temperature'] = 0.5
+        # 检查并添加 'max_tokens'
+        if 'max_tokens' not in self_recognize_model_config:
+            self_recognize_model_config['max_tokens'] = 800
+        else:
+            # 如果配置中有，但您想强制使用 800，则取消注释下面一行
+            # self_recognize_model_config['max_tokens'] = 800
+            pass # 保持现有配置中的 max_tokens
+
+        # 确保 'request_type' 存在
+        self_recognize_model_config['request_type'] = "focus.processor.self_identify"
+        
+        # 现在将这个构建好的字典传递给 LLMRequest 的 model_config 参数
+        self.llm_model = LLMRequest(model_config=self_recognize_model_config)
 
         name = chat_manager.get_stream_name(self.subheartflow_id)
         self.log_prefix = f"[{name}] "
