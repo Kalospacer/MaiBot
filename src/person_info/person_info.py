@@ -29,7 +29,6 @@ install(extra_lines=3)
 logger = get_logger("person_info")
 
 person_info_default = {
-    # "person_id": None, # <<< 关键修正：从这里移除 'person_id' 默认值 >>>
     "person_name": None, "name_reason": None,
     "platform": "unknown", "user_id": "unknown", "nickname": "Unknown",
     "relationship_value": 0, "know_time": 0, "msg_interval": 2000,
@@ -58,8 +57,6 @@ class PersonInfoManager:
                 if record.person_name:
                     self.person_name_list[record.person_id] = record.person_name
             logger.debug(f"已加载 {len(self.person_name_list)} 个用户名称。")
-        except Exception as e:
-            logger.error(f"从数据库加载 person_name_list 失败: {e}")
         finally:
             if not db.is_closed():
                 db.close()
@@ -88,11 +85,10 @@ class PersonInfoManager:
             logger.error(f"尝试创建个人信息失败：传入的person_id为空或无效。原始数据: {data}")
             return
         
-        # <<< 关键修正：确保 person_id 最后被显式赋值，优先级最高 >>>
         final_data = {
-            **person_info_default, # 先应用默认值
-            **(data or {}),        # 覆盖传入的数据
-            "person_id": person_id # 最后显式设置 person_id，确保它不会被覆盖且值正确
+            **person_info_default,
+            **(data or {}),
+            "person_id": person_id
         }
         
         model_fields = PersonInfo._meta.fields.keys()
@@ -139,9 +135,10 @@ class PersonInfoManager:
             record = PersonInfo.select(getattr(PersonInfo, f_name)).where(PersonInfo.person_id == p_id).get_or_none()
             return record is not None and getattr(record, f_name) is not None
         try:
-            return await asyncio.to_thread(_db_has_field_sync, person_id, f_name)
+            return await asyncio.to_thread(_db_has_field_sync, person_id, field_name) # <<< 关键修正：确保这里传递的是 field_name >>>
         except Exception as e:
-            logger.error(f"检查字段 {f_name} for {p_id} 时出错: {e}")
+            # <<< 关键修正：使用外部作用域的变量 >>>
+            logger.error(f"检查字段 {field_name} for {person_id} 时出错: {e}")
             return False
 
     async def get_value(self, person_id: str, field_name: str):
@@ -201,7 +198,7 @@ class PersonInfoManager:
     async def personal_habit_deduction(self):
         while True:
             logger.info("个人信息推断任务正在运行...")
-            await asyncio.sleep(86400) # Sleep for a day
+            await asyncio.sleep(86400)
 
     async def get_person_info_by_name(self, person_name: str) -> dict | None:
         return None
