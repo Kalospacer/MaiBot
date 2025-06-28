@@ -25,9 +25,9 @@ class NoReplyAction(BaseAction):
     action_description = "不回复"
     action_parameters = {}
     action_require = [
-        "话题无关/无聊/不感兴趣/不懂",
-        "聊天记录中最新一条消息是你自己发的且无人回应你",
-        "你连续发送了太多消息，且无人回复",
+        "",
+        "",
+        "",
     ]
     default = True
 
