@@ -1,14 +1,16 @@
-import random
-from src.common.logger_manager import get_logger
-from src.llm_models.utils_model import LLMRequest
-from src.config.config import global_config
-from src.chat.utils.prompt_builder import Prompt, global_prompt_manager
-from typing import List, Tuple
-import os
+import asyncio
 import json
+import os
+import random
+import re
+from typing import List, Tuple
 
-logger = get_logger("expressor")
+from src.common.logger_manager import get_logger
+from src.config.config import global_config
+from src.llm_models.utils_model import LLMRequest
+from src.chat.utils.prompt_builder import Prompt, global_prompt_manager
 
+logger = get_logger("expressor_style")
 
 def init_prompt() -> None:
     personality_expression_prompt = """
@@ -32,11 +34,21 @@ def init_prompt() -> None:
 
 class PersonalityExpression:
     def __init__(self):
-        self.express_learn_model: LLMRequest = LLMRequest(
-            model=global_config.model.focus_expressor,
-            max_tokens=512,
-            request_type="expressor.learner",
-        )
+        # --- FINAL FIX: Use the new, correct LLMRequest initialization ---
+        try:
+            # Get the complete model configuration block and convert it to a dictionary
+            expressor_model_config = global_config.model.focus_expressor
+            # Initialize LLMRequest with the correct parameter name 'model_config'
+            self.express_learn_model: LLMRequest = LLMRequest(
+                model_config=expressor_model_config,
+                max_tokens=512,
+                request_type="expressor.learner",
+            )
+        except Exception as e:
+            logger.error(f"加载 [model.focus_expressor] 配置失败，表达学习功能将不可用: {e}")
+            self.express_learn_model = None
+        # --- FIX END ---
+
         self.meta_file_path = os.path.join("data", "expression", "personality", "expression_style_meta.json")
         self.expressions_file_path = os.path.join("data", "expression", "personality", "expressions.json")
         self.max_calculations = 20
@@ -47,7 +59,6 @@ class PersonalityExpression:
                 with open(self.meta_file_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except json.JSONDecodeError:
-                logger.warning(f"无法解析 {self.meta_file_path} 中的JSON数据，将重新开始。")
                 return {"last_style_text": None, "count": 0}
         return {"last_style_text": None, "count": 0}
 
@@ -57,12 +68,11 @@ class PersonalityExpression:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     async def extract_and_store_personality_expressions(self):
-        """
-        检查data/expression/personality目录，不存在则创建。
-        用peronality变量作为chat_str，调用LLM生成表达风格，解析后count=100，存储到expressions.json。
-        如果expression_style发生变化，则删除旧的expressions.json并重置计数。
-        对于相同的expression_style，最多计算self.max_calculations次。
-        """
+        # Check if the model was initialized successfully
+        if not self.express_learn_model:
+            logger.warning("表达学习模型未初始化，跳过提取。")
+            return
+
         os.makedirs(os.path.dirname(self.expressions_file_path), exist_ok=True)
 
         current_style_text = global_config.expression.expression_style
@@ -72,86 +82,61 @@ class PersonalityExpression:
         count = meta_data.get("count", 0)
 
         if current_style_text != last_style_text:
-            logger.info(f"表达风格已从 '{last_style_text}' 变为 '{current_style_text}'。重置计数。")
+            logger.info("表达风格已更改，重置计数并删除旧文件。")
             count = 0
             if os.path.exists(self.expressions_file_path):
-                try:
-                    os.remove(self.expressions_file_path)
-                    logger.info(f"已删除旧的表达文件: {self.expressions_file_path}")
-                except OSError as e:
-                    logger.error(f"删除旧的表达文件 {self.expressions_file_path} 失败: {e}")
+                try: os.remove(self.expressions_file_path)
+                except OSError as e: logger.error(f"删除旧表达文件失败: {e}")
 
         if count >= self.max_calculations:
-            logger.debug(f"对于风格 '{current_style_text}' 已达到最大计算次数 ({self.max_calculations})。跳过提取。")
-            # 即使跳过，也更新元数据以反映当前风格已被识别且计数已满
+            # Update meta data even if we skip, to persist the current style text
             self._write_meta_data({"last_style_text": current_style_text, "count": count})
             return
 
-        # 构建prompt
-        prompt = await global_prompt_manager.format_prompt(
-            "personality_expression_prompt",
-            personality=current_style_text,
-        )
-        # logger.info(f"个性表达方式提取prompt: {prompt}")
-
+        prompt = await global_prompt_manager.format_prompt("personality_expression_prompt", personality=current_style_text)
+        
         try:
-            response, _ = await self.express_learn_model.generate_response_async(prompt)
+            # Unpack the response tuple correctly
+            response_tuple = await self.express_learn_model.generate_response_async(prompt)
+            if response_tuple and len(response_tuple) >= 2:
+                response, _ = response_tuple
+            else:
+                logger.error("个性表达方式提取的响应格式不正确。")
+                response = None
+                
         except Exception as e:
             logger.error(f"个性表达方式提取失败: {e}")
-            # 如果提取失败，保存当前的风格和未增加的计数
             self._write_meta_data({"last_style_text": current_style_text, "count": count})
             return
+        
+        if not response:
+             logger.warning("未能从LLM获取有效的表达方式响应。")
+             return
 
-        logger.info(f"个性表达方式提取response: {response}")
-        # chat_id用personality
         expressions = self.parse_expression_response(response, "personality")
-        # 转为dict并count=100
-        result = []
-        for _, situation, style in expressions:
-            result.append({"situation": situation, "style": style, "count": 100})
-        # 超过50条时随机删除多余的，只保留50条
+        result = [{"situation": sit, "style": sty, "count": 100} for _, sit, sty in expressions]
+        
         if len(result) > 50:
-            remove_count = len(result) - 50
-            remove_indices = set(random.sample(range(len(result)), remove_count))
-            result = [item for idx, item in enumerate(result) if idx not in remove_indices]
-
+            result = random.sample(result, 50)
+            
         with open(self.expressions_file_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         logger.info(f"已写入{len(result)}条表达到{self.expressions_file_path}")
 
-        # 成功提取后更新元数据
         count += 1
         self._write_meta_data({"last_style_text": current_style_text, "count": count})
         logger.info(f"成功处理。风格 '{current_style_text}' 的计数现在是 {count}。")
 
     def parse_expression_response(self, response: str, chat_id: str) -> List[Tuple[str, str, str]]:
-        """
-        解析LLM返回的表达风格总结，每一行提取"当"和"使用"之间的内容，存储为(situation, style)元组
-        """
         expressions: List[Tuple[str, str, str]] = []
         for line in response.splitlines():
             line = line.strip()
-            if not line:
-                continue
-            # 查找"当"和下一个引号
-            idx_when = line.find('当"')
-            if idx_when == -1:
-                continue
-            idx_quote1 = idx_when + 1
-            idx_quote2 = line.find('"', idx_quote1 + 1)
-            if idx_quote2 == -1:
-                continue
-            situation = line[idx_quote1 + 1 : idx_quote2]
-            # 查找"使用"
-            idx_use = line.find('使用"', idx_quote2)
-            if idx_use == -1:
-                continue
-            idx_quote3 = idx_use + 2
-            idx_quote4 = line.find('"', idx_quote3 + 1)
-            if idx_quote4 == -1:
-                continue
-            style = line[idx_quote3 + 1 : idx_quote4]
-            expressions.append((chat_id, situation, style))
+            if not line: continue
+            
+            match = re.search(r'当"(.*?)"时，.*?"(.*?)"', line)
+            if match:
+                situation, style = match.groups()
+                expressions.append((chat_id, situation, style))
         return expressions
 
 
