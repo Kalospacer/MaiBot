@@ -1,5 +1,3 @@
-# 文件: src/llm_models/utils_model.py
-
 import asyncio
 import json
 import re
@@ -22,7 +20,7 @@ from rich.traceback import install
 install(extra_lines=3)
 logger = get_module_logger("model_utils")
 
-# --- 全局LLM请求追踪字典和打印函数保持不变 ---
+# --- 全局LLM请求追踪字典 ---
 _ongoing_llm_requests: Dict[str, Dict[str, Any]] = {}
 
 def log_ongoing_llm_requests():
@@ -69,6 +67,17 @@ def extract_json_from_text(text: str) -> Optional[dict]:
 
 class LLMRequest:
     MODELS_NEEDING_TRANSFORMATION = ["o1", "o1-mini", "o1-preview", "o1-pro", "o3", "o3-mini", "o4-mini"]
+
+    # Define a set of request types that *strictly* expect structured output.
+    # If the LLM call for these types fails to produce structured data,
+    # LLMRequest should return None for content, NOT a conversational fallback.
+    STRUCTURED_OUTPUT_REQUEST_TYPES = {
+        "focus.observation.chat", # ChattingInfoProcessor summary - expects text output, but often JSON prompt, so failure should be None
+        "focus.planner", # Planner - *strictly* expects JSON
+        "focus.memory_activator", # Memory Activator - *strictly* expects JSON
+        "embedding", # Embedding API - *strictly* expects list
+        "image_description", # Image description, expects JSON or text
+    }
 
     def __init__(self, model_config: dict, **kwargs):
         try:
@@ -139,18 +148,18 @@ class LLMRequest:
                     async with session.post(request_content["api_url"], headers=headers, json=request_content["payload"], timeout=120) as response:
                         request_end_time = time.monotonic()
                         duration = (request_end_time - request_start_time) * 1000
-                        logger.info(f"LLM请求 '{requester.request_type}' (模型: {requester.model_name}, Provider: {requester.provider}, ReqID: {request_id}) 完成! 耗时: {duration:.2f}ms (尝试 {attempt + 1})")
+                        logger.info(f"LLM请求 '{requester.request_type}' (模型: {requester.model_name}, Provider: {requester.provider}) 完成! 耗时: {duration:.2f}ms (尝试 {attempt + 1})")
                         final_result = await requester._handle_response(response, request_content)
                         break # Exit loop on success
             except Exception as e:
                 request_end_time = time.monotonic()
                 duration = (request_end_time - request_start_time) * 1000
                 if attempt >= request_content["policy"]["max_retries"] - 1:
-                    logger.error(f"LLM请求 '{requester.request_type}' (模型: {requester.model_name}, ReqID: {request_id}) 已达到最大重试次数，最终失败! 耗时: {duration:.2f}ms. 错误: {e}")
+                    logger.error(f"LLM请求 '{requester.request_type}' (模型: {requester.model_name}) 已达到最大重试次数，最终失败! 耗时: {duration:.2f}ms. 错误: {e}")
                     final_result = None # Ensure final_result is None on ultimate failure
                 else:
                     wait_time = request_content["policy"]["base_wait"] * (2 ** attempt)
-                    logger.warning(f"LLM请求 '{requester.request_type}' (模型: {requester.model_name}, ReqID: {request_id}) 失败 (尝试 {attempt + 1}), 等待 {wait_time}s... 耗时: {duration:.2f}ms. 错误: {e}")
+                    logger.warning(f"LLM请求 '{requester.request_type}' (模型: {requester.model_name}) 失败 (尝试 {attempt + 1}), 等待 {wait_time}s... 耗时: {duration:.2f}ms. 错误: {e}")
                     await asyncio.sleep(wait_time)
         
         # Remove request from ongoing tracking after it's completed or failed all retries
@@ -167,7 +176,7 @@ class LLMRequest:
         This is the final, architecturally correct version for the new behavior.
         """
         # Step 1: Primary model: Attempt once (no retries here)
-        logger.debug(f"🚀 正在尝试主引擎: {self.model_name} (Provider: {self.provider})")
+        logger.debug(f"🚀 正在尝试主引擎: {self.model_name} (Provider: {self.provider}) (首次尝试)")
         
         # Create a temporary policy for primary model's single attempt at this level
         primary_kwargs = kwargs.copy()
@@ -179,7 +188,7 @@ class LLMRequest:
         
         # Step 2: If primary fails AND a fallback is configured, immediately switch to fallback
         if primary_result is None and self.fallback_model_name:
-            logger.warning(f"⚠️ 主引擎 {self.model_name} 调用失败，切换至备用引擎: {self.fallback_model_name}...")
+            logger.warning(f"⚠️ 主引擎 {self.model_name} 调用失败 (首次尝试)，立即切换至备用引擎: {self.fallback_model_name}...")
             
             try:
                 fallback_config_dict = getattr(global_config.model, self.fallback_model_name, None)
@@ -256,7 +265,7 @@ class LLMRequest:
             if usage := result.get("usage"):
                 self._record_usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), usage.get("total_tokens", 0), **handler_kwargs)
             # 返回一个包含该字典的元组作为 content，reasoning 和 tool_calls 为 None
-            return (result, None, None) # (content, reasoning, tool_calls)
+            return (result, None, None) # (content=dict, reasoning=None, tool_calls=None)
         
         logger.warning(f"响应中无'choices'字段且无法识别响应格式: {result}")
         return None
@@ -265,7 +274,7 @@ class LLMRequest:
     def _extract_reasoning(content: str) -> Tuple[str, str]:
         if not isinstance(content, str): return "", ""
         match = re.search(r"(?:<think>)?(.*?)</think>", content, re.DOTALL)
-        # 移除重复且已包含在其他地方的注释，恢复代码逻辑
+        # 修正正则表达式中的笔误
         text = re.sub(r"(?:<think>)?.*?</think>", "", content, flags=re.DOTALL, count=1).strip()
         return text, match.group(1).strip() if match else ""
     async def _build_headers(self, no_key: bool = False) -> dict:
@@ -288,26 +297,30 @@ class LLMRequest:
             params["max_completion_tokens"] = params.pop("max_tokens")
         return params
 
-    # --- FINAL FIX: Correctly call the default handler in the processing layer ---
     async def _process_response(self, raw_result: Optional[Dict], handler_kwargs: Dict, default_response: Tuple) -> Tuple:
-        if raw_result is None:
-            logger.warning(f"模型 {self.model_name} (包括备用模型) 调用失败，提供默认安全回复。")
-            return default_response
+        processed_response = None
         
-        # Use a new `response_handler` kwarg for custom handlers, or fall back to the default
-        handler = handler_kwargs.pop("response_handler", self._default_response_handler)
-        processed_response = handler(raw_result, **handler_kwargs)
+        if raw_result is not None: # Only try to process if raw_result is not None (meaning HTTP request succeeded)
+            handler = handler_kwargs.pop("response_handler", self._default_response_handler)
+            processed_response = handler(raw_result, **handler_kwargs)
 
         if processed_response is None:
-            logger.warning(f"模型 {self.model_name} 响应处理失败，提供默认安全回复。")
-            return default_response
-        
-        # processed_response 此时可能是 (str, str, Optional[list]) 或者 (dict, None, None)
-        # 我们需要确保它始终是 (content, reasoning, tool_calls)
-        # 如果 processed_response 是 (dict, None, None)，那么它的长度是3，可以直接解包。
-        # 如果是 (str, str)，它的长度是2，需要补齐 None。
-        
-        # Check if processed_response is a tuple and its length
+            # If processed_response is None, it means the model either:
+            # 1. Failed to respond (raw_result was None)
+            # 2. Responded, but the handler could not extract usable content (e.g., content: null, or unparsable structure)
+            
+            # Here, we decide if we return a conversational default or simply None for content.
+            # If the request type is for structured output, we should return (None, None, None)
+            if self.request_type in self.STRUCTURED_OUTPUT_REQUEST_TYPES:
+                logger.warning(f"模型 {self.model_name} (包括备用模型) 响应处理失败，由于 '{self.request_type}' 类型要求结构化输出，返回空结果。")
+                return (None, None, None) # Return (None, None, None) for content
+            else:
+                # For other request types (e.g., general chat, internal thoughts not strictly structured),
+                # return the conversational default response.
+                logger.warning(f"模型 {self.model_name} (包括备用模型) 调用失败，提供默认安全回复。")
+                return default_response # This is the conversational default
+
+        # ... (rest of the _process_response, which converts processed_response to a 3-tuple) ...
         if isinstance(processed_response, tuple):
             if len(processed_response) == 3:
                 return processed_response
@@ -315,9 +328,8 @@ class LLMRequest:
                 # Assuming it's (content_str, reasoning) without tool_calls
                 return (processed_response[0], processed_response[1], None)
         
-        # Fallback for unexpected format (though _default_response_handler should prevent this now)
         logger.warning(f"模型 {self.model_name} 响应处理器返回了意外格式: {processed_response}，提供默认安全回复。")
-        return default_response
+        return default_response # Safest bet if the format is completely unexpected.
         
     async def _call_and_process(self, default_response: Tuple, **kwargs) -> Tuple:
         raw_result = await self._execute_request(**kwargs)
@@ -331,7 +343,7 @@ class LLMRequest:
             ("嗯... 麦麦好像开小差了，你能再说一遍吗？", "", None),
             prompt=prompt, endpoint="/chat/completions"
         )
-        return content, reasoning, self.model_name, tool_calls
+        return content, reasoning, tool_calls, self.model_name # Added self.model_name for consistency
 
     async def generate_response_async(self, prompt: str, **kwargs) -> Union[str, Tuple]:
         payload = {"model": self.model_name, "messages": [{"role": "user", "content": prompt}], **self.params, **kwargs}

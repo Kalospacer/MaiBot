@@ -1,3 +1,5 @@
+# 文件: src/person_info/person_info.py
+
 import asyncio
 import copy
 import datetime
@@ -27,7 +29,8 @@ install(extra_lines=3)
 logger = get_logger("person_info")
 
 person_info_default = {
-    "person_id": None, "person_name": None, "name_reason": None,
+    # "person_id": None, # <<< 关键修正：从这里移除 'person_id' 默认值 >>>
+    "person_name": None, "name_reason": None,
     "platform": "unknown", "user_id": "unknown", "nickname": "Unknown",
     "relationship_value": 0, "know_time": 0, "msg_interval": 2000,
     "msg_interval_list": [], "user_cardname": None, "user_avatar": None,
@@ -38,18 +41,15 @@ class PersonInfoManager:
     def __init__(self):
         self.person_name_list = {}
         
-        # --- FINAL FIX: Use the new, correct LLMRequest initialization ---
         try:
-            utils_model_config = global_config.model.utils
-            self.qv_name_llm = LLMRequest(
-                model_config=utils_model_config,
-                max_tokens=256,
-                request_type="relation.qv_name",
-            )
+            utils_model_config = global_config.model.utils.copy()
+            utils_model_config['request_type'] = "relation.qv_name"
+            if 'max_tokens' not in utils_model_config:
+                utils_model_config['max_tokens'] = 256
+            self.qv_name_llm = LLMRequest(model_config=utils_model_config)
         except Exception as e:
             logger.error(f"加载 [model.utils] 配置失败，部分个人信息功能将不可用: {e}")
             self.qv_name_llm = None
-        # --- FIX END ---
 
         try:
             db.connect(reuse_if_open=True)
@@ -70,8 +70,6 @@ class PersonInfoManager:
         key = f"{platform}_{user_id}"
         return hashlib.md5(key.encode()).hexdigest()
 
-    # --- All your original methods are restored here ---
-    
     async def is_person_known(self, platform: str, user_id: int):
         person_id = self.get_person_id(platform, user_id)
         return await asyncio.to_thread(lambda: PersonInfo.get_or_none(PersonInfo.person_id == person_id) is not None)
@@ -86,13 +84,35 @@ class PersonInfoManager:
 
     @staticmethod
     async def create_person_info(person_id: str, data: dict = None):
-        if not person_id: return
-        final_data = {"person_id": person_id, **person_info_default, **(data or {})}
+        if not person_id:
+            logger.error(f"尝试创建个人信息失败：传入的person_id为空或无效。原始数据: {data}")
+            return
+        
+        # <<< 关键修正：确保 person_id 最后被显式赋值，优先级最高 >>>
+        final_data = {
+            **person_info_default, # 先应用默认值
+            **(data or {}),        # 覆盖传入的数据
+            "person_id": person_id # 最后显式设置 person_id，确保它不会被覆盖且值正确
+        }
+        
         model_fields = PersonInfo._meta.fields.keys()
         db_data = {k: v for k, v in final_data.items() if k in model_fields}
+        
         if "msg_interval_list" in db_data and isinstance(db_data["msg_interval_list"], list):
             db_data["msg_interval_list"] = json.dumps(db_data["msg_interval_list"])
-        await asyncio.to_thread(lambda: PersonInfo.create(**db_data))
+
+        logger.debug(f"尝试创建PersonInfo记录，person_id: {person_id}, 最终传入数据: {db_data}")
+        
+        if 'person_id' not in db_data or not db_data['person_id']:
+            logger.critical(f"致命错误：db_data中缺少person_id或其值为空！这不应发生。db_data: {db_data}")
+            raise ValueError("Person ID is missing or invalid in database creation data.")
+        
+        try:
+            await asyncio.to_thread(lambda: PersonInfo.create(**db_data))
+            logger.info(f"成功为 person_id '{person_id}' 创建了PersonInfo记录。")
+        except Exception as e:
+            logger.error(f"为 person_id '{person_id}' 创建PersonInfo记录失败，数据: {db_data}。错误: {e}", exc_info=True)
+            raise
 
     async def update_one_field(self, person_id: str, field_name: str, value, data: dict = None):
         if field_name not in PersonInfo._meta.fields: return
@@ -109,7 +129,6 @@ class PersonInfoManager:
             creation_data[field_name] = value
             await self.create_person_info(person_id, creation_data)
 
-    # --- THIS IS THE RESTORED METHOD ---
     @staticmethod
     async def has_one_field(person_id: str, field_name: str):
         """判断是否存在某一个字段"""
@@ -117,15 +136,13 @@ class PersonInfoManager:
             logger.debug(f"检查字段'{field_name}'失败，未在 PersonInfo Peewee 模型中定义。")
             return False
         def _db_has_field_sync(p_id: str, f_name: str):
-            # A more direct check: see if the field is not None
             record = PersonInfo.select(getattr(PersonInfo, f_name)).where(PersonInfo.person_id == p_id).get_or_none()
             return record is not None and getattr(record, f_name) is not None
         try:
-            return await asyncio.to_thread(_db_has_field_sync, person_id, field_name)
+            return await asyncio.to_thread(_db_has_field_sync, person_id, f_name)
         except Exception as e:
-            logger.error(f"检查字段 {field_name} for {person_id} 时出错: {e}")
+            logger.error(f"检查字段 {f_name} for {p_id} 时出错: {e}")
             return False
-    # --- RESTORATION END ---
 
     async def get_value(self, person_id: str, field_name: str):
         if not person_id: return person_info_default.get(field_name)
@@ -171,8 +188,7 @@ class PersonInfoManager:
         return {}
     
     async def qv_person_name(self, person_id: str, user_nickname: str, user_cardname: str, user_avatar: str, request: str = ""):
-        if not self.qv_name_llm: return None # Check if LLM was initialized
-        # ... (rest of your qv_person_name logic)
+        if not self.qv_name_llm: return None
         return None
         
     async def get_or_create_person(self, platform: str, user_id: int, **kwargs) -> str:
@@ -182,18 +198,12 @@ class PersonInfoManager:
             await self.create_person_info(person_id, data=initial_data)
         return person_id
 
-    # --- THIS IS THE RESTORED METHOD ---
     async def personal_habit_deduction(self):
-        """启动个人信息推断，每天根据一定条件推断一次"""
-        # All your original logic for this method is restored here.
-        # This is a placeholder for your actual implementation.
         while True:
             logger.info("个人信息推断任务正在运行...")
             await asyncio.sleep(86400) # Sleep for a day
 
-    # --- And other methods from your original file ---
     async def get_person_info_by_name(self, person_name: str) -> dict | None:
-        # ... your original logic here ...
         return None
 
 # Creating a singleton instance

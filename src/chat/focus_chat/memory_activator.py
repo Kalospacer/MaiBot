@@ -1,5 +1,3 @@
-# 文件: src/chat/focus_chat/memory_activator.py
-
 import asyncio
 import difflib
 import json
@@ -20,17 +18,6 @@ from src.llm_models.utils_model import LLMRequest
 
 install(extra_lines=3)
 logger = get_logger("memory_activator")
-
-
-# get_keywords_from_json 函数不再需要修复，因为它已经能够处理直接传入字典的情况
-# def get_keywords_from_json(json_str: str) -> List[str]:
-#     try:
-#         fixed_json = repair_json(json_str)
-#         result = json.loads(fixed_json) if isinstance(fixed_json, str) else fixed_json
-#         return result.get("keywords", [])
-#     except Exception as e:
-#         logger.error(f"解析关键词JSON失败: {e}")
-#         return []
 
 
 def init_prompt():
@@ -54,18 +41,14 @@ def init_prompt():
 
 class MemoryActivator:
     def __init__(self):
-        # --- LLMRequest initialization remains correct ---
         try:
             summary_model_config = global_config.model.memory_summary
-            # Adding specific parameters for LLMRequest initialization from here
-            # These will merge with base config from bot_config.toml
-            # Ensure model_config is a copy to avoid modifying original global_config
             model_config_for_llm = summary_model_config.copy()
             if 'temperature' not in model_config_for_llm:
-                model_config_for_llm['temperature'] = 0.7 # Default temperature for summary model
+                model_config_for_llm['temperature'] = 0.7
             if 'max_tokens' not in model_config_for_llm:
-                model_config_for_llm['max_tokens'] = 50 # Default max_tokens for summary model
-            model_config_for_llm['request_type'] = "focus.memory_activator" # Ensure request_type is set
+                model_config_for_llm['max_tokens'] = 50
+            model_config_for_llm['request_type'] = "focus.memory_activator"
             
             self.summary_model = LLMRequest(model_config=model_config_for_llm)
         except Exception as e:
@@ -96,30 +79,30 @@ class MemoryActivator:
             cached_keywords=cached_keywords_str,
         )
 
-        # generate_response 返回的是 (content, reasoning, tool_calls)
-        # content 可能是 str 或 Dict
+        # generate_response returns (content, reasoning, tool_calls, model_name)
+        # content could be str or Dict or None
         response_tuple = await self.summary_model.generate_response(prompt)
         
-        if not response_tuple:
-            logger.warning("记忆激活时，LLM未能生成关键词。")
-            return self.running_memory
-
-        raw_llm_content = response_tuple[0] # 获取第一个元素 (content)
-        
         keywords_data: Optional[Dict] = None
-        if isinstance(raw_llm_content, dict):
-            # 如果 LLMRequest 已经帮我们解析好了 JSON，直接使用
-            keywords_data = raw_llm_content
-        elif isinstance(raw_llm_content, str):
-            # 如果 LLMRequest 返回的是字符串，再尝试解析 JSON
-            try:
-                fixed_json = repair_json(raw_llm_content)
-                keywords_data = json.loads(fixed_json) if isinstance(fixed_json, str) else fixed_json
-            except Exception as e:
-                logger.error(f"memory_activator: 从LLM响应字符串解析JSON失败: {e}. 原始内容: {raw_llm_content[:200]}")
+        # <<< 关键修正：安全处理 response_tuple[0] 可能为 None 的情况 >>>
+        if response_tuple and response_tuple[0] is not None:
+            raw_llm_content = response_tuple[0]
+            
+            if isinstance(raw_llm_content, dict):
+                keywords_data = raw_llm_content
+            elif isinstance(raw_llm_content, str):
+                try:
+                    fixed_json = repair_json(raw_llm_content)
+                    keywords_data = json.loads(fixed_json) if isinstance(fixed_json, str) else fixed_json
+                except Exception as e:
+                    logger.error(f"memory_activator: 从LLM响应字符串解析JSON失败: {e}. 原始内容: {raw_llm_content[:200]}")
+                    keywords_data = None
+            else:
+                logger.warning(f"memory_activator: LLM响应内容类型非预期: {type(raw_llm_content)}")
                 keywords_data = None
         else:
-            logger.warning(f"memory_activator: LLM响应内容类型非预期: {type(raw_llm_content)}")
+            # 如果 response_tuple 为空 (LLM调用失败) 或 response_tuple[0] 为 None (结构化返回空)
+            logger.warning("记忆激活时，LLM未能生成关键词或返回了空内容。")
             keywords_data = None
 
         keywords = keywords_data.get("keywords", []) if keywords_data else []
